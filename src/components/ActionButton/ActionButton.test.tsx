@@ -2,7 +2,7 @@ import { fireEvent, render } from '@testing-library/react-native';
 
 import { ACTION_IDS, type ActionId } from '@model/types';
 
-import ActionButton from './ActionButton';
+import ActionButton, { actionEmphasis } from './ActionButton';
 
 // `render` is ASYNC in @testing-library/react-native v14 — forget the await and
 // you get "getByText is not a function". Same note as AccessTierBadge.test.tsx.
@@ -12,14 +12,16 @@ import ActionButton from './ActionButton';
 const LABELS: Record<ActionId, string> = {
   read: 'Read',
   download: 'Download',
-  addToQueue: 'Add me to queue',
+  grantAccess: 'Grant access',
+  acceptOffer: 'Accept',
+  rejectOffer: 'Reject',
   revokeLicence: 'Revoke licence',
   subscribe: 'Subscribe',
   signIn: 'Sign in',
 };
 
 describe('ActionButton', () => {
-  // Iterates the contract rather than a list of six, so a seventh action fails
+  // Iterates the contract rather than a list of eight, so a ninth action fails
   // here until it has a label.
   ACTION_IDS.forEach((action) => {
     it(`renders the ${action} label`, async () => {
@@ -45,27 +47,26 @@ describe('ActionButton', () => {
     });
   });
 
+  // `done` renders a button inert. Since the 16 Aug flow change no action defines
+  // a `doneLabel` — `addToQueue` was the only one that ever did — so the label
+  // always falls through. The inertness is the part with a job left.
   describe('done', () => {
-    it('swaps addToQueue to its spent label', async () => {
-      const { getByText, queryByText } = await render(
-        <ActionButton action="addToQueue" state="done" />,
-      );
-      expect(getByText('Added to queue')).toBeTruthy();
-      expect(queryByText('Add me to queue')).toBeNull();
-    });
-
-    it('cannot be tapped again, so a reader cannot queue twice', async () => {
+    it('cannot be tapped again, so an offer cannot be accepted twice', async () => {
       const onPress = jest.fn();
       const { getByTestId } = await render(
-        <ActionButton action="addToQueue" state="done" onPress={onPress} />,
+        <ActionButton action="acceptOffer" state="done" onPress={onPress} />,
       );
-      fireEvent.press(getByTestId('action-button-addToQueue'));
+      fireEvent.press(getByTestId('action-button-acceptOffer'));
       expect(onPress).not.toHaveBeenCalled();
     });
 
-    it('falls back to the normal label for an action with no spent form', async () => {
-      const { getByText } = await render(<ActionButton action="read" state="done" />);
-      expect(getByText('Read')).toBeTruthy();
+    // Iterates the contract, so the day something DOES define a `doneLabel` this
+    // fails and the assertion above has to be split rather than quietly widened.
+    ACTION_IDS.forEach((action) => {
+      it(`falls back to the normal label for ${action}, which has no spent form`, async () => {
+        const { getByText } = await render(<ActionButton action={action} state="done" />);
+        expect(getByText(LABELS[action])).toBeTruthy();
+      });
     });
   });
 
@@ -107,8 +108,41 @@ describe('ActionButton', () => {
     });
   });
 
+  // `revokeLicence` carries the longest label in the vocabulary now that
+  // "Add me to queue" is gone, so it is the one that would grow the bar first.
   it('truncates rather than wrapping, so a long label cannot grow the bar', async () => {
-    const { getByText } = await render(<ActionButton action="addToQueue" />);
-    expect(getByText('Add me to queue').props.numberOfLines).toBe(1);
+    const { getByText } = await render(<ActionButton action="revokeLicence" />);
+    expect(getByText('Revoke licence').props.numberOfLines).toBe(1);
+  });
+
+  // `actionEmphasis` is what ActionBar reads to decide whether an action sits in
+  // the row or drops to its own line beneath it (CONVENTIONS: ActionBar never
+  // names an action itself). These are the three entries this PR added or
+  // reconsidered, and `rejectOffer` is the one judgement call worth pinning: the
+  // 16 Aug comment explains why it is `outlined` and not `quiet` like
+  // `revokeLicence`, even though both actions take something away from the
+  // reader. Flipping it back is one word, and this is the test that would catch
+  // the flip happening by accident.
+  describe('actionEmphasis', () => {
+    it('gives grantAccess and acceptOffer full weight, as the button a reader is meant to tap', () => {
+      expect(actionEmphasis('grantAccess')).toBe('filled');
+      expect(actionEmphasis('acceptOffer')).toBe('filled');
+    });
+
+    it('keeps rejectOffer at equal standing beside acceptOffer, not demoted to quiet', () => {
+      expect(actionEmphasis('rejectOffer')).toBe('outlined');
+    });
+
+    it('still sends revokeLicence to its own line beneath the row', () => {
+      expect(actionEmphasis('revokeLicence')).toBe('quiet');
+    });
+
+    // Every action has an entry — a ninth action with no emphasis would throw
+    // reading `ACTIONS[action].emphasis`, not fail a specific assertion.
+    it('has an emphasis for every declared action', () => {
+      ACTION_IDS.forEach((action) => {
+        expect(() => actionEmphasis(action)).not.toThrow();
+      });
+    });
   });
 });
