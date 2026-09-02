@@ -1,19 +1,25 @@
 // Screen 02 — Sign-in sheet (CAP-3).
 // transparentModal, not BottomSheet — nesting a Modal inside transparentModal causes z-index issues on Android.
-// STUB: handleSignIn has no real SAML call — replace when flambeau publishes the sign-in contract.
 import { useCallback, useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import * as WebBrowser from 'expo-web-browser';
 
 import ActionButton from '@components/ActionButton';
 import ErrorState from '@components/ErrorState';
 import OfflineBanner from '@components/OfflineBanner';
+import { getAuthApiClient } from '@/config/auth';
 import { useInstitutionStore } from '@store/institutionStore';
 import { usePendingIntentStore } from '@store/pendingIntentStore';
 import { useSessionStore } from '@store/sessionStore';
+import { saveRefreshToken } from '@store/secureStorage';
 import { useNetworkStatus } from '@hooks/useNetworkStatus';
 import { color, radius, space, type as typeScale } from '@theme/tokens';
 import type { CatalogueStackParamList } from '../navigation/types';
+
+// Matches the backend's SamlAuthenticationSuccessHandler/FailureHandler deep link exactly
+// (tfreader://auth/callback?code=... or ?error=...) — see app.json's "scheme": "tfreader".
+const DEEP_LINK_CALLBACK = 'tfreader://auth/callback';
 
 type Props = NativeStackScreenProps<CatalogueStackParamList, 'SignIn'>;
 
@@ -36,23 +42,37 @@ export default function SignInScreen({ navigation }: Props) {
     setSignInError(false);
     setSubmitting(true);
     try {
-      // STUB — exercises the full pending-intent round trip without a real SAML
-      // call. Replace with real steps when flambeau publishes the sign-in contract:
-      //   1. Call flambeau.beginSamlSignIn({ institutionId, idpHint }) and open the
-      //      browser — `idpHint` comes from GET /api/v1/institutions/{id} → signIn.idpHint
-      //   2. Receive the token via deep link (tfreader://auth-complete) or authTxnId
-      //      polling — contract still TBD (Question 5 in the planning doc)
-      //   3. Call setSession() with the real token from step 2, then replay the intent
-      //
-      // Placeholder: synthesise a short-lived session so access resolves correctly
-      // when the reader lands back on ItemDetail after "signing in".
+      const auth = getAuthApiClient();
+
+      const { authorizationUrl } = await auth.beginSamlSignIn(institution.id);
+      const result = await WebBrowser.openAuthSessionAsync(
+        auth.resolveAuthorizationUrl(authorizationUrl),
+        DEEP_LINK_CALLBACK,
+      );
+
+      if (result.type !== 'success') {
+        // 'cancel' / 'dismiss' — the reader closed the browser themselves, not a failure.
+        return;
+      }
+
+      const callbackUrl = new URL(result.url);
+      const error = callbackUrl.searchParams.get('error');
+      if (error) throw new Error(`SAML sign-in failed: ${error}`);
+
+      const code = callbackUrl.searchParams.get('code');
+      if (!code) throw new Error('SAML callback carried no code');
+
+      const token = await auth.exchangeCode(code);
+      const me = await auth.getMe(token.accessToken);
+
+      await saveRefreshToken(token.refreshToken);
       setSession({
-        accessToken: `stub:${institution.id}`,
-        expiresIn: 3600,
-        userId: `stub:${institution.id}`,
-        institutionId: institution.id,
-        roles: [],
-        collections: [],
+        accessToken: token.accessToken,
+        expiresIn: token.expiresIn,
+        userId: me.userId,
+        institutionId: me.institutionId,
+        roles: me.roles,
+        collections: me.collections,
       });
 
       // `popTo`, NOT `navigate` — for the common case the same ItemDetail is
@@ -64,6 +84,16 @@ export default function SignInScreen({ navigation }: Props) {
       if (intent?.action === 'read') {
         navigation.popTo('ItemDetail', { itemId: intent.itemId });
       } else {
+        // No intent to replay — the dev "Sign in (test)" path lands here, and
+        // a silent goBack() is indistinguishable from the flow failing
+        // outright. This confirms the real token round trip actually happened.
+        if (__DEV__) {
+          // Logged, not just alerted — a screenshot of the alert is easy to mistranscribe
+          // one character of a 200+ char token from; the Metro log is copy-pasteable exactly.
+          console.log('[dev sign-in] accessToken:', token.accessToken);
+          console.log('[dev sign-in] refreshToken:', token.refreshToken);
+          Alert.alert('Signed in', `userId: ${me.userId}\nroles: ${me.roles.join(', ')}\n\nTokens printed to the Metro log.`);
+        }
         navigation.goBack();
       }
     } catch {

@@ -30,11 +30,11 @@
 // IT IS LAID OUT INLINE RATHER THAN AS A COMPONENT. It has exactly one caller and
 // no variants, so a shared component would be the speculative one CONVENTIONS §10
 // rules out, and a screen-local copy is what §7 forbids. Screen composition it is.
-import { useCallback } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useNavigation, type NavigationProp, type CompositeNavigationProp } from '@react-navigation/native';
 import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { InstitutionRow } from '@components/InstitutionRow';
@@ -81,6 +81,18 @@ export default function ProfileScreen() {
   const clearSelectedInstitution = useInstitutionStore((s) => s.clearSelectedInstitution);
   const clearSession = useSessionStore((s) => s.clearSession);
 
+  // Set right before sending the developer to InstitutionList with nothing
+  // selected yet, same pattern AccessGateScreen uses for the real gate: cross-tab
+  // navigate's own goBack() lands back on this screen either way, so the effect
+  // below is what actually continues on to SignIn once a selection lands.
+  const awaitingInstitutionForSignIn = useRef(false);
+
+  useEffect(() => {
+    if (!awaitingInstitutionForSignIn.current || selectedInstitution === null) return;
+    awaitingInstitutionForSignIn.current = false;
+    navigation.navigate('Catalogue', { screen: 'SignIn' });
+  }, [selectedInstitution, navigation]);
+
   const handleChangeInstitution = useCallback(() => {
     // Screen 06 is the institution list, and it lives in the Catalogue stack as
     // `InstitutionList` — the same route CatalogueScreen's picker pushes. React
@@ -94,6 +106,20 @@ export default function ProfileScreen() {
   const handleReadingPreferences = useCallback(() => {
     navigation.navigate('ReaderPreferences');
   }, [navigation]);
+
+  // Dev-only shortcut to exercise the real SAML flow without going through
+  // ItemDetail → AccessGate. SignInScreen reads its institution from the store
+  // and bounces back to nothing if it is empty, so this sends the developer to
+  // pick one first when none is selected yet — same as "Select institution" above.
+  const handleTestSignIn = useCallback(() => {
+    if (selectedInstitution === null) {
+      // The effect above continues to SignIn once a selection lands.
+      awaitingInstitutionForSignIn.current = true;
+      navigation.navigate('Catalogue', { screen: 'InstitutionList' });
+      return;
+    }
+    navigation.navigate('Catalogue', { screen: 'SignIn' });
+  }, [navigation, selectedInstitution]);
 
   const handleSignOut = useCallback(() => {
     // ORDER: session first, institution second, then navigate.
@@ -258,6 +284,12 @@ export default function ProfileScreen() {
             subtitle="Every component, variant and state — dev builds only"
             variant="chevron"
             onPress={() => navigation.navigate('Gallery')}
+          />
+          <ListRow
+            title="Sign in (test)"
+            subtitle="Real SAML flow against flambeau — skips ItemDetail/AccessGate"
+            variant="chevron"
+            onPress={handleTestSignIn}
           />
         </View>
       )}
