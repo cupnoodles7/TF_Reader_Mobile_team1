@@ -8,11 +8,11 @@
 // renders a live preview of the result. That boundary is why the Font section can
 // offer faces this app has never loaded.
 //
-// ─── FOUR SECTIONS, FOUR OWNERS, FOUR FILES ──────────────────────────────────
+// ─── FIVE SECTIONS, FIVE FILES ───────────────────────────────────────────────
 //
-// Theme and Font are mine and land with this file. Layout is Keshav's and
-// Typography is Prayas's, and each is a SEPARATE FILE beside this one, imported
-// and dropped into the numbered slot below.
+// Theme, Font and Accessibility are mine. Layout is Keshav's and Typography is
+// Prayas's. Each is a SEPARATE FILE beside this one, imported and dropped into
+// the numbered slot below.
 //
 // That is the whole point of the split. Three people editing one function body
 // is the merge conflict the Week 3 plan sequences commits to avoid; three people
@@ -20,6 +20,7 @@
 //
 //   Keshav  → ReaderPreferencesScreen.LayoutSection.tsx
 //   Prayas  → ReaderPreferencesScreen.TypographySection.tsx
+//   Khushi  → ReaderPreferencesScreen.AccessibilitySection.tsx
 //
 // Take `prefs` and the matching `on<Event>` from the hook, exactly as the two
 // sections below do. Do not call `useReaderPrefs` inside a section — one hook
@@ -51,6 +52,7 @@ import { color, space, type as typeScale } from '@theme/tokens';
 
 import { useReaderPrefs, type PrefsSource } from '@/features/personalization/useReaderPrefs';
 
+import AccessibilitySection from './ReaderPreferencesScreen.AccessibilitySection';
 import FontSection from './ReaderPreferencesScreen.FontSection';
 import LayoutSection from './ReaderPreferencesScreen.LayoutSection';
 import ThemeSection from './ReaderPreferencesScreen.ThemeSection';
@@ -59,10 +61,14 @@ import TypographySection from './ReaderPreferencesScreen.TypographySection';
 const READ_FAILED_MESSAGE = "We couldn't load your reading preferences.";
 const SAVE_FAILED_MESSAGE = "That change didn't save. Try again.";
 
-// Four bars standing in for a header and its control, at roughly the height one
-// section occupies, repeated per section so the page does not shorten when the
-// values land.
-const SKELETON_SECTIONS = ['theme', 'font', 'layout', 'typography'] as const;
+// One bar pair standing in for a header and its control, at roughly the height
+// one section occupies, repeated per section so the page does not shorten when
+// the values land.
+//
+// ACCESSIBILITY IS IN THE LIST because it is a real section; it is a single
+// entry rather than five because this is a placeholder for page height, not a
+// scale drawing of what arrives.
+const SKELETON_SECTIONS = ['theme', 'font', 'layout', 'typography', 'accessibility'] as const;
 
 export interface ReaderPreferencesScreenProps {
   /**
@@ -90,6 +96,18 @@ export default function ReaderPreferencesScreen({
     onChangeLineHeight,
     onChangeLetterSpacing,
     onChangeMargins,
+    onToggleDyslexiaFont,
+    onToggleRespectOsFontScale,
+    onToggleReadableSpacing,
+    onChangeFontScaleMultiplier,
+    onToggleBoldText,
+    onToggleHighContrast,
+    onToggleLargeTouchTargets,
+    onToggleLargeAudioControls,
+    onSelectReduceMotion,
+    onToggleAnnouncePageChanges,
+    onToggleAnnounceChapterChanges,
+    onToggleScreenReaderHints,
     onRestoreDefaults,
     onRetry,
   } = useReaderPrefs({ source: prefsSource });
@@ -153,10 +171,33 @@ export default function ReaderPreferencesScreen({
           onChangeMargins={onChangeMargins}
         />
 
+        {/* ── 5 · Accessibility — Khushi ─────────────────────────────────
+            LAST OF THE FIVE, ABOVE RESTORE DEFAULTS. It is the longest section
+            and the one a reader arrives at deliberately rather than while
+            browsing, so putting it above Theme would bury the four settings
+            most people came for. */}
+        <AccessibilitySection
+          accessibility={prefs.accessibility}
+          onToggleDyslexiaFont={onToggleDyslexiaFont}
+          onToggleRespectOsFontScale={onToggleRespectOsFontScale}
+          onToggleReadableSpacing={onToggleReadableSpacing}
+          onChangeFontScaleMultiplier={onChangeFontScaleMultiplier}
+          onToggleBoldText={onToggleBoldText}
+          onToggleHighContrast={onToggleHighContrast}
+          onToggleLargeTouchTargets={onToggleLargeTouchTargets}
+          onToggleLargeAudioControls={onToggleLargeAudioControls}
+          onSelectReduceMotion={onSelectReduceMotion}
+          onToggleAnnouncePageChanges={onToggleAnnouncePageChanges}
+          onToggleAnnounceChapterChanges={onToggleAnnounceChapterChanges}
+          onToggleScreenReaderHints={onToggleScreenReaderHints}
+        />
+
         {/* ── Restore defaults ──────────────────────────────────────────────
-            LAST, AND DELIBERATELY BELOW EVERY SECTION. It resets all eight
-            controls, so it belongs after the things it resets rather than at the
-            top where it can be hit while reaching for Theme.
+            LAST, AND DELIBERATELY BELOW EVERY SECTION. It resets all twenty
+            user-facing controls — eight across Theme, Font, Layout and
+            Typography, plus the twelve in Accessibility — so it belongs after
+            the things it resets rather than at the top where it can be hit
+            while reaching for Theme.
 
             `destructive`, matching the Sign out row on screen 10 — the same
             "this discards something you chose" weight, drawn the same way, so a
@@ -169,7 +210,7 @@ export default function ReaderPreferencesScreen({
         <View style={styles.restore}>
           <ListRow
             title="Restore defaults"
-            subtitle="Resets theme, font, layout and typography"
+            subtitle="Resets theme, font, layout, typography and accessibility"
             variant="destructive"
             onPress={onRestoreDefaults}
           />

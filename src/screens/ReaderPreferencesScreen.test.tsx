@@ -101,10 +101,30 @@ describe('ReaderPreferencesScreen theme section', () => {
   // `highContrast` is a real member of the contract's Theme union, deliberately
   // not offered: it pairs with `AccessibilityPrefs.highContrast`, which prefs.ts
   // marks as pending Hruthik's sign-off.
-  it('does not offer high contrast', async () => {
+  // SCOPED TO THE THEME SECTION, and it was not always. This used to query the
+  // whole screen, which was equivalent while nothing else could render the
+  // words — Accessibility now legitimately does, as the ONE contrast control
+  // (Hruthik's contract, FINAL 2026-09-02: contrast is independent of theme, so
+  // dark plus high contrast is valid).
+  //
+  // THE ASSERTION IS NOT WEAKENED BY THE NARROWING. What it always meant is
+  // "the Theme picker must not offer highContrast as a theme", and that is
+  // exactly what it still checks. The companion assertion below then pins the
+  // other half — that the setting does exist, once, somewhere else — so the two
+  // together are stricter than the original single query.
+  it('does not offer high contrast as a theme', async () => {
     await renderReady(fakeSource());
 
-    expect(screen.queryByText(/high.?contrast/i)).toBeNull();
+    const themeSection = within(screen.getByTestId('theme-section'));
+    expect(themeSection.queryByText(/high.?contrast/i)).toBeNull();
+  });
+
+  it('offers high contrast exactly once, in Accessibility rather than Theme', async () => {
+    await renderReady(fakeSource());
+
+    const matches = screen.getAllByText(/high.?contrast/i);
+    expect(matches).toHaveLength(1);
+    expect(within(screen.getByTestId('accessibility-display-group')).getByText('High contrast')).toBeTruthy();
   });
 
   it('marks the stored theme as the selected option', async () => {
@@ -467,5 +487,231 @@ describe('ReaderPreferencesScreen accessibility', () => {
     fireEvent.press(themeSection().getByText('Dark'));
 
     await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+  });
+});
+
+// ─── 5 · Accessibility (Hruthik's contract, FINAL 2026-09-02) ────────────────
+//
+// TWELVE CONTROLS, FOUR GROUPS, AND NO TTS. The last of those is asserted
+// explicitly rather than left implicit: `accessibility.tts` is a real group on
+// the record that this screen must never surface, so "it is not rendered" is a
+// property worth a failing test if someone adds it.
+//
+// THE TRI-STATE IS THE POINT OF MOST OF THESE. `reduceMotion` is the one field
+// on this screen that a well-meaning change could quietly turn into a boolean,
+// so it is pinned from several directions: the stored default, both non-default
+// selections, and the type of what actually reaches the seam.
+
+const accessibilitySection = () => within(screen.getByTestId('accessibility-section'));
+const textGroup = () => within(screen.getByTestId('accessibility-text-group'));
+const displayGroup = () => within(screen.getByTestId('accessibility-display-group'));
+const announceGroup = () => within(screen.getByTestId('accessibility-announce-group'));
+
+// The accessibility defaults, reached through DEFAULT_PREFS rather than
+// retyped, so a contract change moves these tests instead of silently passing
+// against a stale copy.
+const A11Y = DEFAULT_PREFS.accessibility;
+
+describe('ReaderPreferencesScreen accessibility section', () => {
+  it('renders all four groups', async () => {
+    await renderReady(fakeSource());
+
+    expect(screen.getByTestId('accessibility-text-group')).toBeTruthy();
+    expect(screen.getByTestId('accessibility-display-group')).toBeTruthy();
+    expect(screen.getByTestId('accessibility-announce-group')).toBeTruthy();
+    expect(screen.getByTestId('accessibility-hints-group')).toBeTruthy();
+  });
+
+  it('renders all twelve controls', async () => {
+    await renderReady(fakeSource());
+
+    const a11y = accessibilitySection();
+    // Ten toggles…
+    [
+      'Dyslexia-friendly font',
+      'Match device text size',
+      'Readable spacing',
+      'Bold text',
+      'High contrast',
+      'Large touch targets',
+      'Large audio controls',
+      'Page changes',
+      'Chapter changes',
+      'Extra screen reader hints',
+    ].forEach((label) => expect(a11y.getByText(label)).toBeTruthy());
+
+    // …one slider, one segmented picker.
+    expect(a11y.getByTestId('accessibility-font-scale-slider')).toBeTruthy();
+    expect(a11y.getByText('Reduce motion')).toBeTruthy();
+  });
+
+  it('shows every toggle at its contract default', async () => {
+    await renderReady(fakeSource());
+
+    // `ListRow` puts role="switch" on the ROW, not on the inner RN Switch, and
+    // exposes its state as `accessibilityState.checked` — see ListRow.test.tsx.
+    const checked = (group: ReturnType<typeof within>, label: string) =>
+      group.getByRole('switch', { name: label }).props.accessibilityState.checked;
+
+    // The three that default ON are the interesting ones — a blanket "all
+    // false" would pass against a record that had lost them.
+    expect(checked(textGroup(), 'Match device text size')).toBe(true);
+    expect(checked(announceGroup(), 'Page changes')).toBe(true);
+    expect(checked(announceGroup(), 'Chapter changes')).toBe(true);
+
+    expect(checked(textGroup(), 'Dyslexia-friendly font')).toBe(false);
+    expect(checked(displayGroup(), 'High contrast')).toBe(false);
+  });
+
+  it('defaults pageChanges and chapterChanges to true in the contract itself', () => {
+    // Guards the defaults at the source, not just at the render — a screen test
+    // alone would still pass if both the default and the assertion were flipped.
+    expect(A11Y.announce.pageChanges).toBe(true);
+    expect(A11Y.announce.chapterChanges).toBe(true);
+  });
+
+  it('shows the font scale multiplier at 1.0', async () => {
+    await renderReady(fakeSource());
+
+    expect(A11Y.text.fontScaleMultiplier).toBe(1.0);
+    expect(accessibilitySection().getByTestId('accessibility-font-scale-slider').props.value).toBe(
+      1.0,
+    );
+    expect(accessibilitySection().getByText('1.0×')).toBeTruthy();
+  });
+
+  it("defaults reduceMotion to 'system'", async () => {
+    await renderReady(fakeSource());
+
+    expect(A11Y.display.reduceMotion).toBe('system');
+    expect(displayGroup().getByTestId('tabs-tab-system').props.accessibilityState.selected).toBe(
+      true,
+    );
+  });
+
+  it("selects 'on' and writes the raw string", async () => {
+    const source = fakeSource();
+    await renderReady(source);
+
+    fireEvent.press(displayGroup().getByText('On'));
+
+    expect(source.savePrefs).toHaveBeenCalledWith({
+      accessibility: { ...A11Y, display: { ...A11Y.display, reduceMotion: 'on' } },
+    });
+  });
+
+  it("selects 'off' and writes the raw string", async () => {
+    const source = fakeSource();
+    await renderReady(source);
+
+    fireEvent.press(displayGroup().getByText('Off'));
+
+    expect(source.savePrefs).toHaveBeenCalledWith({
+      accessibility: { ...A11Y, display: { ...A11Y.display, reduceMotion: 'off' } },
+    });
+  });
+
+  // THE ANTI-REGRESSION FOR THE ONE MISTAKE THIS FIELD INVITES. 'off' is falsy
+  // in no useful sense and `false` is not a member of the union, but a
+  // well-meaning `Boolean(...)` or `=== 'on'` somewhere on the path would still
+  // typecheck at a cast. Assert the runtime type, not just the value.
+  it('never coerces reduceMotion to a boolean', async () => {
+    const source = fakeSource();
+    await renderReady(source);
+
+    fireEvent.press(displayGroup().getByText('Off'));
+
+    const patch = (source.savePrefs as jest.Mock).mock.calls[0][0];
+    expect(typeof patch.accessibility.display.reduceMotion).toBe('string');
+    expect(patch.accessibility.display.reduceMotion).toBe('off');
+  });
+
+  // THE LOAD-BEARING ONE FOR THE TWO-LEVEL MERGE. Hruthik's contract warns the
+  // top-level-replace rule "bites twice" here: a naive patch would wipe the
+  // four sibling fields in `display` AND the sibling `text` / `announce` / `tts`
+  // groups. Both levels are asserted.
+  it('preserves siblings at both levels when one nested field changes', async () => {
+    const source = fakeSource();
+    await renderReady(source);
+
+    fireEvent.press(displayGroup().getByText('On'));
+
+    const patch = (source.savePrefs as jest.Mock).mock.calls[0][0];
+    // Level 2 — the other four display fields survive.
+    expect(patch.accessibility.display).toEqual({
+      ...A11Y.display,
+      reduceMotion: 'on',
+    });
+    // Level 1 — the sibling groups survive.
+    expect(patch.accessibility.text).toEqual(A11Y.text);
+    expect(patch.accessibility.announce).toEqual(A11Y.announce);
+    expect(patch.accessibility.tts).toEqual(A11Y.tts);
+    expect(patch.accessibility.screenReaderHints).toBe(A11Y.screenReaderHints);
+  });
+
+  it('preserves siblings when a top-level accessibility field changes', async () => {
+    const source = fakeSource();
+    await renderReady(source);
+
+    fireEvent.press(
+      within(screen.getByTestId('accessibility-hints-group')).getByRole('switch', {
+        name: 'Extra screen reader hints',
+      }),
+    );
+
+    expect(source.savePrefs).toHaveBeenCalledWith({
+      accessibility: { ...A11Y, screenReaderHints: true },
+    });
+  });
+
+  // CLAMPED IN THE HOOK, NOT BY THE SLIDER — the slider's own bounds only
+  // constrain a drag, so the guard is asserted by driving the event past them
+  // directly, which is exactly what another caller could do.
+  it('clamps the font scale multiplier to the top of its range', async () => {
+    const source = fakeSource();
+    await renderReady(source);
+
+    fireEvent(
+      accessibilitySection().getByTestId('accessibility-font-scale-slider'),
+      'slidingComplete',
+      4.0,
+    );
+
+    const patch = (source.savePrefs as jest.Mock).mock.calls[0][0];
+    expect(patch.accessibility.text.fontScaleMultiplier).toBe(1.5);
+  });
+
+  it('clamps the font scale multiplier to the bottom of its range', async () => {
+    const source = fakeSource();
+    await renderReady(source);
+
+    fireEvent(
+      accessibilitySection().getByTestId('accessibility-font-scale-slider'),
+      'slidingComplete',
+      0.1,
+    );
+
+    const patch = (source.savePrefs as jest.Mock).mock.calls[0][0];
+    expect(patch.accessibility.text.fontScaleMultiplier).toBe(0.8);
+  });
+
+  it('says screen reader hints do not reach book content', async () => {
+    await renderReady(fakeSource());
+
+    const hints = within(screen.getByTestId('accessibility-hints-group'));
+    expect(hints.getByText(/does not change book content/i)).toBeTruthy();
+    expect(hints.getByText(/text inside a book .* is not affected/i)).toBeTruthy();
+  });
+
+  // `accessibility.tts` is Ahana's, driven from the in-reader TtsControls panel.
+  // Named fields rather than a bare "TTS" query, so this fails loudly if any
+  // one of them is surfaced.
+  it('renders no TTS section or controls', async () => {
+    await renderReady(fakeSource());
+
+    expect(screen.queryByText(/text.to.speech|\bTTS\b/i)).toBeNull();
+    [/voice/i, /\brate\b/i, /\bpitch\b/i, /background playback/i, /highlight mode/i].forEach(
+      (pattern) => expect(screen.queryByText(pattern)).toBeNull(),
+    );
   });
 });
