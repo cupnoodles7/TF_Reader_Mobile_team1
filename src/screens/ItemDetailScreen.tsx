@@ -634,10 +634,11 @@ export default function ItemDetailScreen({ route, navigation }: ItemDetailRouteP
   // loading/failure, and it runs from a press handler, not an effect.
   const fetchItem = useCallback(() => {
     const source = getCatalogueSource();
-    // No institution means the reader arrived from the public catalogue, so the
-    // public route is the only one that can honestly answer for them.
+    // Use the public route when there is no institution OR when the reader is
+    // not signed in — the institution endpoint needs a token so calling it
+    // unauthenticated would always return 401.
     const request =
-      institutionId === null
+      institutionId === null || session === null
         ? source.getPublicPublication(itemId)
         : source.getPublication(institutionId, itemId);
 
