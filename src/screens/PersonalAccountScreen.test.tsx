@@ -171,7 +171,7 @@ const SUCCESSFUL_SESSION: personalAccount.PersonalAuthResult = {
 };
 
 describe('PersonalAccountScreen — a successful call', () => {
-  // signInWithPassword is real now (it calls the OIDC endpoints), so these tests
+  // signInWithPassword is real now (it calls /auth/login), so these tests
   // stub it directly rather than exercising the network.
   beforeEach(() => {
     jest.spyOn(personalAccount, 'signInWithPassword').mockResolvedValue(SUCCESSFUL_SESSION);
