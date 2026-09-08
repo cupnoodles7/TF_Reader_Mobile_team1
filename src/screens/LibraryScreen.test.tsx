@@ -11,6 +11,8 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 
 import type { Bookmark } from '@/shared/contracts';
+import { LibraryProviderContext } from '@/features/library/context';
+import type { LibraryProvider } from '@/features/library/ports';
 import type { DataSource } from '@adapters/InstitutionSource';
 import { setCatalogueSource } from '@config/catalogue';
 import type { BookSummary, Hold, Loan } from '@model/types';
@@ -98,7 +100,7 @@ function aBookmark(over: Partial<Bookmark> = {}): Bookmark {
 }
 
 /** Every heading, in the order the screen renders them on the overview. */
-const SECTIONS = ['Offered to you', 'On loan', 'Downloads', 'Bookmarks', 'Waiting'];
+const SECTIONS = ['Offered to you', 'Borrowed Books', 'Downloads', 'Bookmarks', 'Waiting'];
 
 /**
  * The section headings on screen, in render order.
@@ -134,7 +136,7 @@ describe('LibraryScreen — the empty shelf', () => {
   it('names every section even with nothing in any of them', async () => {
     await render(<LibraryScreen />);
 
-    await waitFor(() => expect(screen.getByText('On loan')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('Offered to you')).toBeTruthy());
     expect(renderedSections()).toEqual(SECTIONS);
   });
 
@@ -164,7 +166,7 @@ describe('LibraryScreen — the empty shelf', () => {
 
     await render(<LibraryScreen />);
 
-    await waitFor(() => expect(screen.getByText('On loan')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('Offered to you')).toBeTruthy());
     expect(getItemsBatch).not.toHaveBeenCalled();
   });
 });
@@ -299,7 +301,7 @@ describe('LibraryScreen — the tab bar', () => {
     await waitFor(() => expect(renderedSections()).toEqual(['Bookmarks']));
 
     fireEvent.press(screen.getByTestId('tabs-tab-loans'));
-    await waitFor(() => expect(renderedSections()).toEqual(['On loan']));
+    await waitFor(() => expect(renderedSections()).toEqual(['Borrowed Books']));
 
     expect(mockGetLibrary).toHaveBeenCalledTimes(1);
   });
@@ -374,7 +376,7 @@ describe('LibraryScreen — hydration', () => {
 
     await render(<LibraryScreen />);
 
-    await waitFor(() => expect(screen.getByText('On loan')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('Offered to you')).toBeTruthy());
     expect(screen.getByText('item_42')).toBeTruthy();
   });
 
@@ -508,7 +510,7 @@ describe('LibraryScreen — downloads', () => {
   // A SUBSCRIPTION title a student downloads is both a loan and a download: the
   // loan is what expires, the download is what opens in a tunnel. Two facts, so
   // two rows — dropping either loses the answer the other cannot give.
-  it('shows a subscription download under both On loan and Downloads', async () => {
+  it('shows a subscription download under both Borrowed Books and Downloads', async () => {
     setCatalogueSource(
       fakeSource(async () => ({
         items: [aSummary({ id: 'item_42', title: 'Applied Thermodynamics' })],
@@ -647,7 +649,7 @@ describe('LibraryScreen — offline', () => {
   it('shows no offline banner when connected', async () => {
     await render(<LibraryScreen />);
 
-    await waitFor(() => expect(screen.getByText('On loan')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('Offered to you')).toBeTruthy());
     expect(screen.queryByText("You're offline")).toBeNull();
   });
 });
@@ -660,7 +662,7 @@ describe('LibraryScreen — first load', () => {
 
     await render(<LibraryScreen />);
 
-    // One per server-sourced section: Offered, On loan, Waiting.
+    // One per server-sourced section: Offered, Borrowed Books, Waiting.
     await waitFor(() => expect(screen.getAllByTestId('library-loading')).toHaveLength(3));
     expect(renderedSections()).toEqual(SECTIONS);
     // The skeleton stands in for rows, so it replaces the empty copy.
@@ -687,5 +689,218 @@ describe('LibraryScreen — the shelf is the launch screen', () => {
     await render(<LibraryScreen />);
 
     await waitFor(() => expect(mockGetLibrary).toHaveBeenCalled());
+  });
+});
+
+// The small components lifted from the design mockup — a borrowed-books card, a
+// downloads summary line, a tier pill and a queue-progress bar. Every one is fed
+// by data the app actually has; the mockup's invented fields (reading %, offline
+// "Ready", wait estimate) are deliberately absent.
+describe('LibraryScreen — the mockup components', () => {
+  it('labels the loans tab "Borrowed Books" and the holds tab "Premium books"', async () => {
+    await render(<LibraryScreen />);
+
+    await waitFor(() => expect(screen.getByTestId('tabs-label-loans')).toBeTruthy());
+    expect(screen.getByTestId('tabs-label-loans').props.children).toBe('Borrowed Books');
+    expect(screen.getByTestId('tabs-label-holds').props.children).toBe('Premium books');
+  });
+
+  it('summarises the Downloads section as a count and total size', async () => {
+    useDownloadStore
+      .getState()
+      .markDownloaded({ itemId: 'item_a', downloadedAt: 2, sizeBytes: 14.2 * 1_048_576 });
+    useDownloadStore
+      .getState()
+      .markDownloaded({ itemId: 'item_b', downloadedAt: 1, sizeBytes: 8.6 * 1_048_576 });
+
+    await render(<LibraryScreen />);
+
+    await waitFor(() => expect(screen.getByText('2 items · 22.8 MB')).toBeTruthy());
+  });
+
+  it('counts downloads that reported no size, omitting the megabytes', async () => {
+    useDownloadStore.getState().markDownloaded({ itemId: 'item_a', downloadedAt: 1 });
+
+    await render(<LibraryScreen />);
+
+    await waitFor(() => expect(screen.getByText('1 item')).toBeTruthy());
+  });
+
+  it('shows the access tier on a borrowed book once its title hydrates', async () => {
+    setCatalogueSource(
+      fakeSource(async () => ({
+        items: [aSummary({ id: 'item_42', accessTier: 'SUBSCRIPTION' })],
+        notFound: [],
+        denied: [],
+      })),
+    );
+    givenHoldings([aLoan({ itemId: 'item_42' })], []);
+
+    await render(<LibraryScreen />);
+
+    await waitFor(() => expect(screen.getByText('Subscription')).toBeTruthy());
+  });
+
+  it('draws a queue-progress bar when a hold carries a position and a length', async () => {
+    givenHoldings([], [aHold({ state: 'queued', position: 3, queueLength: 7 })]);
+
+    await render(<LibraryScreen />);
+
+    await waitFor(() => expect(screen.getByText('3rd of 7')).toBeTruthy());
+    expect(screen.getByTestId('queue-progress')).toBeTruthy();
+  });
+
+  it('draws no queue-progress bar for a position with no queue length', async () => {
+    givenHoldings([], [aHold({ state: 'queued', position: 3 })]);
+
+    await render(<LibraryScreen />);
+
+    await waitFor(() => expect(screen.getByText('3rd in the queue')).toBeTruthy());
+    expect(screen.queryByTestId('queue-progress')).toBeNull();
+  });
+});
+
+// The provider seam (src/features/library): download/bookmark rows tap through
+// `LibraryProvider.openBook` → `openReader`. A fake provider is injected via
+// context; with none injected the default stand-in refuses and the screen says so.
+describe('LibraryScreen — opening a book through the provider', () => {
+  function makeProvider(over: Partial<LibraryProvider> = {}): LibraryProvider {
+    return {
+      listDownloads: async () => [],
+      listBookmarks: async () => [],
+      openBook: jest.fn().mockResolvedValue(undefined),
+      openReader: jest.fn(),
+      ...over,
+    };
+  }
+
+  function renderWith(provider: LibraryProvider) {
+    return render(
+      <LibraryProviderContext.Provider value={provider}>
+        <LibraryScreen />
+      </LibraryProviderContext.Provider>,
+    );
+  }
+
+  it('opens a downloaded book — gate then reader — when its row is tapped', async () => {
+    setCatalogueSource(
+      fakeSource(async () => ({
+        items: [aSummary({ id: 'item_42', title: 'Applied Thermodynamics', format: 'PDF' })],
+        notFound: [],
+        denied: [],
+      })),
+    );
+    useDownloadStore.getState().markDownloaded({ itemId: 'item_42', downloadedAt: 1 });
+    const provider = makeProvider();
+
+    await renderWith(provider);
+
+    await waitFor(() => expect(screen.getByText('Applied Thermodynamics')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('content-card'));
+
+    await waitFor(() => expect(provider.openBook).toHaveBeenCalledWith('item_42', 'PDF'));
+    expect(provider.openReader).toHaveBeenCalledWith({ itemId: 'item_42', format: 'PDF' });
+  });
+
+  it('opens a bookmark at its saved position', async () => {
+    setCatalogueSource(
+      fakeSource(async () => ({
+        items: [aSummary({ id: 'item_42', title: 'Applied Thermodynamics' })],
+        notFound: [],
+        denied: [],
+      })),
+    );
+    useBookmarkStore
+      .getState()
+      .addBookmark(aBookmark({ bookId: 'item_42', locator: { type: 'PDF', page: 42 } }));
+    const provider = makeProvider();
+
+    await renderWith(provider);
+
+    await waitFor(() => expect(screen.getByText('Page 42')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('content-card'));
+
+    await waitFor(() => expect(provider.openBook).toHaveBeenCalledWith('item_42', 'PDF'));
+    expect(provider.openReader).toHaveBeenCalledWith({
+      itemId: 'item_42',
+      format: 'PDF',
+      initialTarget: { kind: 'page', page: 42 },
+    });
+  });
+
+  // With no provider mounted, the default stand-in refuses — the screen must say
+  // so honestly rather than appear to open nothing.
+  it('shows an honest notice when the reader is not in this build', async () => {
+    setCatalogueSource(
+      fakeSource(async () => ({
+        items: [aSummary({ id: 'item_42', title: 'Applied Thermodynamics', format: 'PDF' })],
+        notFound: [],
+        denied: [],
+      })),
+    );
+    useDownloadStore.getState().markDownloaded({ itemId: 'item_42', downloadedAt: 1 });
+
+    await render(<LibraryScreen />);
+
+    await waitFor(() => expect(screen.getByText('Applied Thermodynamics')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('content-card'));
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('Reading opens here once the reader ships in the merged app.'),
+      ).toBeTruthy(),
+    );
+  });
+
+  // A row whose title never hydrated has no format to open against — the screen
+  // must say so and NOT call the gate with an undefined format.
+  it('does not open and explains when the format is still unknown', async () => {
+    setCatalogueSource(fakeSource(async () => ({ items: [], notFound: ['item_42'], denied: [] })));
+    useDownloadStore.getState().markDownloaded({ itemId: 'item_42', downloadedAt: 1 });
+    const provider = makeProvider();
+
+    await renderWith(provider);
+
+    // Rendered against its id, since the title could not resolve.
+    await waitFor(() => expect(screen.getByText('item_42')).toBeTruthy());
+    fireEvent.press(screen.getByTestId('content-card'));
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('This one isn’t ready to open yet — still loading its details.'),
+      ).toBeTruthy(),
+    );
+    expect(provider.openBook).not.toHaveBeenCalled();
+  });
+
+  // With the real provider a second tap would race a licence session, so a tap
+  // while one open is in flight is ignored.
+  it('ignores a second tap while the first open is still in flight', async () => {
+    setCatalogueSource(
+      fakeSource(async () => ({
+        items: [aSummary({ id: 'item_42', title: 'Applied Thermodynamics', format: 'PDF' })],
+        notFound: [],
+        denied: [],
+      })),
+    );
+    useDownloadStore.getState().markDownloaded({ itemId: 'item_42', downloadedAt: 1 });
+    // The first tap holds the in-flight guard until we release it, so the second
+    // tap lands while the first open is still pending.
+    let releaseOpen: () => void = () => {};
+    const openBook = jest.fn(() => new Promise<void>((resolve) => (releaseOpen = resolve)));
+    const provider = makeProvider({ openBook });
+
+    await renderWith(provider);
+
+    await waitFor(() => expect(screen.getByText('Applied Thermodynamics')).toBeTruthy());
+    const card = screen.getByTestId('content-card');
+    fireEvent.press(card);
+    fireEvent.press(card);
+
+    await waitFor(() => expect(openBook).toHaveBeenCalledTimes(1));
+
+    // Let the first open finish so nothing is left pending at teardown.
+    releaseOpen();
+    await waitFor(() => expect(provider.openReader).toHaveBeenCalledTimes(1));
   });
 });

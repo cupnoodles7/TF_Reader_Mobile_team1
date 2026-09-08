@@ -60,6 +60,7 @@ import { CATALOGUE_ERROR_COPY, catalogueErrorVariant, WIRE_ERROR_COPY } from '@m
 import { isLicenceFailure, LicenceError } from '@/licence/LicenceSource';
 import { ERROR_CODES } from '@model/types';
 import type { ActionId, ErrorCode, Publication, WorkType } from '@model/types';
+import { useDownloadStore } from '@store/downloadStore';
 import { useInstitutionStore } from '@store/institutionStore';
 import { useLibraryStore } from '@store/libraryStore';
 import { color, elevation, radius, space, type as typeScale } from '@theme/tokens';
@@ -576,17 +577,25 @@ export default function ItemDetailScreen({ route, navigation }: ItemDetailRouteP
   const { itemId } = route.params;
 
   const selectedInstitution = useInstitutionStore((s) => s.selectedInstitution);
-  // NULL IS A REAL STATE HERE, not a missing value: this screen is reachable
-  // from the public catalogue, where the reader has chosen no institution. It
-  // picks the public endpoint in that case, and resolveAccess already takes
-  // `institutionId: string | null`, so the null travels all the way through
-  // rather than being papered over with a default id.
-  const institutionId = selectedInstitution?.id ?? null;
 
   // Null unless the reader has actually signed in — selecting an institution
   // alone is no longer enough (see currentSession.ts's note on why this
   // replaced handToggledSession).
   const session = useCurrentSession();
+
+  // The signed-in session's own institution is authoritative once there is
+  // one — it's what wokay will actually recognise this reader's token
+  // against. `selectedInstitution` (the picker, browsable before sign-in) is
+  // only a fallback for the ahead-of-sign-in case, so a reader who picked one
+  // institution and then signed in as a member of another doesn't keep
+  // fetching under the stale picked one and getting NOT_FOUND back.
+  //
+  // NULL IS A REAL STATE HERE, not a missing value: this screen is reachable
+  // from the public catalogue, where the reader has chosen no institution. It
+  // picks the public endpoint in that case, and resolveAccess already takes
+  // `institutionId: string | null`, so the null travels all the way through
+  // rather than being papered over with a default id.
+  const institutionId = session?.institutionId ?? selectedInstitution?.id ?? null;
 
   // getPublication now requires this (wokay's contract: appToken), but this
   // screen mounts off the selected institution alone, ahead of sign-in — same
@@ -745,7 +754,21 @@ export default function ItemDetailScreen({ route, navigation }: ItemDetailRouteP
       // the action bar updates to reflect the new loan or hold. All four now run
       // through `runLicenceCall`, which owns the pending state and the guard.
       const source = getLicenceSource();
-      if (action === 'read' || action === 'download') {
+      if (action === 'download') {
+        // Download and Read are the same licence call — a borrow — but a download
+        // ALSO records itself on this device so it appears in the Library's
+        // Downloads section. Recorded only after the borrow RESOLVES, so a refused
+        // download leaves no phantom row; the store keeps the record, not the bytes
+        // (CAP-7's ContentStore owns those). The caller stamps the time because
+        // downloadStore deliberately never reads a clock. (Added at Library owner's
+        // request; see downloadStore.ts.)
+        runLicenceCall(action, () =>
+          source.borrow(itemId).then((result) => {
+            useDownloadStore.getState().markDownloaded({ itemId, downloadedAt: Date.now() });
+            return result;
+          }),
+        );
+      } else if (action === 'read') {
         runLicenceCall(action, () => source.borrow(itemId));
       } else if (action === 'revokeLicence' && loan?.loanId !== undefined) {
         const loanId = loan.loanId;

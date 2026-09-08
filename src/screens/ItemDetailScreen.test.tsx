@@ -24,6 +24,7 @@ import { CatalogueError, CatalogueFailure } from '@model/errors';
 import type { Institution } from '@model/institution';
 import type { Acquisition, Publication } from '@model/types';
 import { LicenceError, LicenceFailure } from '@/licence/LicenceSource';
+import { useDownloadStore } from '@store/downloadStore';
 import { useInstitutionStore } from '@store/institutionStore';
 import { useLibraryStore } from '@store/libraryStore';
 import { useSessionStore } from '@store/sessionStore';
@@ -257,6 +258,34 @@ describe('ItemDetailScreen endpoint choice', () => {
 
     await waitFor(() => expect(calls).toEqual([`institution:${INSTITUTION.id}`]));
   });
+
+  // The picker's selection (browsable before sign-in) and the signed-in
+  // session's own institution are two different stores and can disagree —
+  // e.g. a reader browsed one institution's catalogue, then signed in as a
+  // member of another. Fetching under the PICKED institution here would ask
+  // wokay for a publication scoped to an institution the reader's token
+  // doesn't belong to, which is exactly the shape of a NOT_FOUND report this
+  // fixes: the signed-in institution is the one the backend will actually
+  // recognise this reader against.
+  it('asks the signed-in institution endpoint, not a differing picked one', async () => {
+    const calls: string[] = [];
+    const pickedInstitution: Institution = { ...INSTITUTION, id: 'inst_picked' };
+    useInstitutionStore.setState({ selectedInstitution: pickedInstitution });
+    useSessionStore.setState({
+      isAuthenticated: true,
+      accessToken: 'test-access-token',
+      expiresAt: Date.now() + 3_600_000,
+      userId: 'test-user:inst_a21',
+      institutionId: INSTITUTION.id,
+      roles: [],
+      collections: [],
+    });
+    setCatalogueSource(recordingSource(calls));
+
+    await render(<ItemDetailScreen {...routeProps} />);
+
+    await waitFor(() => expect(calls).toEqual([`institution:${INSTITUTION.id}`]));
+  });
 });
 
 describe('ItemDetailScreen loading', () => {
@@ -351,6 +380,48 @@ describe('ItemDetailScreen with a book', () => {
 
     await waitFor(() => expect(screen.getByText('Read')).toBeTruthy());
     expect(screen.getByText('Download')).toBeTruthy();
+  });
+
+  // Added at the Library owner's request: a download must show up in the
+  // Library's Downloads section, which is fed by `downloadStore`. So Download
+  // borrows AND records itself on this device — but only after the borrow
+  // resolves, so a refused download leaves no phantom row.
+  it('records a download in downloadStore after the borrow succeeds', async () => {
+    useDownloadStore.getState().clear();
+    setCatalogueSource(
+      fakeSource(async () => aBook({ acquisition: anAcquisition({ licenceModel: 'OPEN_ACCESS' }) })),
+    );
+
+    await render(<ItemDetailScreen {...routeProps} />);
+
+    await waitFor(() => expect(screen.getByText('Download')).toBeTruthy());
+    fireEvent.press(screen.getByText('Download'));
+
+    await waitFor(() => expect(mockBorrow).toHaveBeenCalledWith('item_42'));
+    await waitFor(() =>
+      expect(useDownloadStore.getState().downloads.map((d) => d.itemId)).toContain('item_42'),
+    );
+  });
+
+  it('records nothing when the download borrow is refused', async () => {
+    useDownloadStore.getState().clear();
+    mockBorrow.mockRejectedValue(
+      new LicenceFailure(LicenceError.REFUSED, {
+        errorCode: 'DOWNLOAD_NOT_PERMITTED',
+        target: 'item_42',
+      }),
+    );
+    setCatalogueSource(
+      fakeSource(async () => aBook({ acquisition: anAcquisition({ licenceModel: 'OPEN_ACCESS' }) })),
+    );
+
+    await render(<ItemDetailScreen {...routeProps} />);
+
+    await waitFor(() => expect(screen.getByText('Download')).toBeTruthy());
+    fireEvent.press(screen.getByText('Download'));
+
+    await waitFor(() => expect(mockBorrow).toHaveBeenCalledWith('item_42'));
+    expect(useDownloadStore.getState().downloads).toHaveLength(0);
   });
 
   // The fixture this screen will meet in the real app is an Elite title, and
